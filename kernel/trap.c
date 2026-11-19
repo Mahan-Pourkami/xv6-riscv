@@ -22,6 +22,36 @@ trapinit(void)
   initlock(&tickslock, "time");
 }
 
+
+static int
+timer_should_yield(struct proc *p)
+{
+#ifdef SCHED_MLFQ
+  int should_yield = 0;
+
+  acquire(&p->lock);
+
+  if (p->queue_level == MLFQ_Q1) {
+    p->quantum_ticks++;
+
+    if (p->quantum_ticks >= MLFQ_RR_QUANTUM) {
+      should_yield = 1;
+    }
+
+  } else if (p->queue_level == MLFQ_Q2) {
+    should_yield = 1; // Temporary Q2 policy
+  }
+
+  release(&p->lock);
+
+  return should_yield;
+
+#else
+  (void)p;
+  return 1; // Original RR
+#endif
+}
+
 // set up to take exceptions and traps while in the kernel.
 void
 trapinithart(void)
@@ -82,7 +112,7 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2)
+  if (which_dev == 2 && timer_should_yield(p))
     yield();
 
   prepare_return();
@@ -154,8 +184,13 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2 && myproc() != 0)
-    yield();
+  if (which_dev == 2) {
+    struct proc *p = myproc();
+
+    // Check running process
+    if (p != 0 && timer_should_yield(p))
+      yield();
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.

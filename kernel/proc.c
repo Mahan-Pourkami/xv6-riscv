@@ -483,6 +483,7 @@ scheduler(void)
               // Remember RR position
               if (level == MLFQ_Q1) {
                 last_rr = index;
+                p->quantum_ticks = 0; // New RR slice
               }
               // Switch to chosen process.  It is the process's job
               // to release its lock and then reacquire it
