@@ -446,6 +446,10 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
 
+  #ifdef SCHED_MLFQ
+    int last_rr = -1; // Last RR slot
+  #endif
+
   c->proc = 0;
   for (;;) {
     // The most recent process to run may have had interrupts
@@ -466,14 +470,26 @@ scheduler(void)
           level <= MLFQ_Q3 && !found;
           level++) {
 
-          for (p = proc; p < &proc[NPROC]; p++) {
+          for (int step = 0; step < NPROC; step++) {
+            int index = step; // Default order
+            if (level == MLFQ_Q1) {
+              index = (last_rr + 1 + step) % NPROC;
+            }
+
+            p = &proc[index]; // Select process slot
             acquire(&p->lock);
+
             if (p->queue_level == level && p->state == RUNNABLE) {
+              // Remember RR position
+              if (level == MLFQ_Q1) {
+                last_rr = index;
+              }
               // Switch to chosen process.  It is the process's job
               // to release its lock and then reacquire it
               // before jumping back to us.
               p->state = RUNNING;
               c->proc = p;
+
               swtch(&c->context, &p->context);
 
               // Don't re-enable interrupts on release.
@@ -485,6 +501,7 @@ scheduler(void)
               found = 1;
             }
             release(&p->lock);
+            
             if (found)
               break; // Stop searching
           }
