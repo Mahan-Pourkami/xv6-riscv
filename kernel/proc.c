@@ -192,6 +192,12 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->queue_level = 0; // Clear reused slot
+  p->queue_enter_tick = 0;
+  p->waiting_ticks = 0;
+  p->burst_time = 0;
+  p->confidence = 0;
+  p->quantum_ticks = 0;
   p->state = UNUSED;
 }
 
@@ -637,6 +643,8 @@ scheduler(void)
             found = 1;
           }
           release(&oldest->lock);
+          if (!found)
+            goto rescan;
         }
         continue;
       }
@@ -943,13 +951,13 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    printk("%d %s %s", p->pid, state, p->name);
-    printk("\n");
-    
-    // Debug MLFQ state
+#ifdef SCHED_MLFQ
+    // Debug snapshot; procdump intentionally does not take locks.
     printk("%d %s %s q=%d wait=%d burst=%d conf=%d\n",
-           p->pid, state, p->name,
-           p->queue_level, p->waiting_ticks,
-           p->burst_time, p->confidence);
+           p->pid, state, p->name, p->queue_level,
+           p->waiting_ticks, p->burst_time, p->confidence);
+#else
+    printk("%d %s %s\n", p->pid, state, p->name);
+#endif
   }
 }
