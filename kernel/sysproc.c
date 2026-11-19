@@ -110,3 +110,17 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// Optional test API; only changes the caller's SJF settings.
+uint64
+sys_mlfqset(void)
+{
+  int burst, confidence;
+  argint(0, &burst);
+  argint(1, &confidence);
+#ifdef SCHED_MLFQ
+  return mlfq_setparams(burst, confidence);
+#else
+  return -1; // No MLFQ in default RR
+#endif
+}

@@ -17,6 +17,9 @@ struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
+#ifdef SCHED_MLFQ
+static uint mlfq_rng[NCPU];
+#endif
 
 extern char trampoline[]; // trampoline.S
 
@@ -51,6 +54,10 @@ procinit(void)
 
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
+#ifdef SCHED_MLFQ
+  for (int i = 0; i < NCPU; i++)
+    mlfq_rng[i] = 0x9e3779b9U ^ ((uint)(i + 1) * 2654435761U);
+#endif
   for (p = proc; p < &proc[NPROC]; p++) {
     initlock(&p->lock, "proc");
     p->state = UNUSED;
@@ -465,6 +472,40 @@ mlfq_aging_tick(void)
 }
 #endif
 
+#ifdef SCHED_MLFQ
+struct mlfq_candidate {
+  int slot;
+  int pid;
+  int burst;
+  int confidence;
+};
+
+// Independent deterministic PRNG stream per CPU, scheduler-only access.
+static int
+mlfq_random100(void)
+{
+  int cpu = cpuid(); // Interrupts are disabled in scheduler
+  // LCG modulo 2^32: a=1664525, c=1013904223; odd c,
+  // a-1 divisible by 4. Use upper bits to avoid weak low bits.
+  mlfq_rng[cpu] = mlfq_rng[cpu] * 1664525U + 1013904223U;
+  return (mlfq_rng[cpu] >> 16) % 100;
+}
+
+// Only the calling process can change its own SJF parameters.
+int
+mlfq_setparams(int burst, int confidence)
+{
+  if (burst < 1 || burst > 1000000 || confidence < 0 || confidence > 100)
+    return -1;
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  p->burst_time = burst;
+  p->confidence = confidence;
+  release(&p->lock);
+  return 0;
+}
+#endif
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -489,6 +530,9 @@ scheduler(void)
     // processes are waiting. Then turn them back off
     // to avoid a possible race between an interrupt
     // and wfi.
+#ifdef SCHED_MLFQ
+  rescan:
+#endif
     intr_on();
     intr_off();
 
@@ -501,6 +545,63 @@ scheduler(void)
       for (int level = MLFQ_Q1;
           level <= MLFQ_Q3 && !found;
           level++) {
+
+      // Approximate SJF: order by burst, then draw confidence.
+      if (level == MLFQ_Q2) {
+        struct mlfq_candidate choices[NPROC];
+        int count = 0;
+        for (int slot = 0; slot < NPROC; slot++) {
+          p = &proc[slot];
+          acquire(&p->lock);
+          if (p->state == RUNNABLE && p->queue_level == MLFQ_Q2) {
+            choices[count].slot = slot;
+            choices[count].pid = p->pid;
+            choices[count].burst = p->burst_time;
+            choices[count].confidence = p->confidence;
+            count++;
+          }
+          release(&p->lock);
+        }
+
+        // Insertion sort, stable by PID for equal bursts.
+        for (int i = 1; i < count; i++) {
+          struct mlfq_candidate key = choices[i];
+          int j = i - 1;
+          while (j >= 0 &&
+                 (choices[j].burst > key.burst ||
+                  (choices[j].burst == key.burst && choices[j].pid > key.pid))) {
+            choices[j + 1] = choices[j];
+            j--;
+          }
+          choices[j + 1] = key;
+        }
+
+        for (int i = 0; i < count; i++) {
+          p = &proc[choices[i].slot];
+          acquire(&p->lock);
+          // A different CPU might have claimed or freed this slot.
+          if (p->state == RUNNABLE && p->queue_level == MLFQ_Q2 &&
+              p->pid == choices[i].pid && p->burst_time == choices[i].burst &&
+              p->confidence == choices[i].confidence &&
+              (i == count - 1 || mlfq_random100() <= choices[i].confidence)) {
+            p->waiting_ticks = 0; // Stop waiting
+            p->state = RUNNING;
+            c->proc = p;
+            swtch(&c->context, &p->context);
+            mycpu()->intena = 0;
+            c->proc = 0;
+            found = 1;
+          }
+          release(&p->lock);
+          if (found)
+            break;
+        }
+        // A selected slot can change after the snapshot. Rescan priorities
+        // before running Q3 or idling if all Q2 dispatch attempts raced.
+        if (count > 0 && !found)
+          goto rescan;
+        continue;
+      }
 
       // FCFS: oldest current entry into Q3 wins.
       if (level == MLFQ_Q3) {
