@@ -110,6 +110,12 @@ static struct proc *
 allocproc(void)
 {
   struct proc *p;
+#ifdef SCHED_MLFQ
+  // The clock wakeup takes process locks while holding tickslock.
+  acquire(&tickslock);
+  uint entry_tick = ticks;
+  release(&tickslock);
+#endif
 
   for (p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
@@ -127,7 +133,11 @@ found:
   
   // Initialize MLFQ
   p->queue_level = MLFQ_Q3;
+#ifdef SCHED_MLFQ
+  p->queue_enter_tick = entry_tick;
+#else
   p->queue_enter_tick = 0;
+#endif
   p->waiting_ticks = 0;
   p->burst_time = 2;
   p->confidence = 50;
@@ -469,6 +479,43 @@ scheduler(void)
       for (int level = MLFQ_Q1;
           level <= MLFQ_Q3 && !found;
           level++) {
+
+      // FCFS: oldest current entry into Q3 wins.
+      if (level == MLFQ_Q3) {
+        struct proc *oldest = 0;
+        uint oldest_tick = 0;
+        int oldest_pid = 0;
+
+        for (p = proc; p < &proc[NPROC]; p++) {
+          acquire(&p->lock);
+          if (p->state == RUNNABLE && p->queue_level == MLFQ_Q3) {
+            if (oldest == 0 ||
+                (int)(p->queue_enter_tick - oldest_tick) < 0 ||
+                (p->queue_enter_tick == oldest_tick && p->pid < oldest_pid)) {
+              oldest = p;
+              oldest_tick = p->queue_enter_tick;
+              oldest_pid = p->pid;
+            }
+          }
+          release(&p->lock);
+        }
+
+        if (oldest != 0) {
+          acquire(&oldest->lock);
+          // Recheck after concurrent CPUs may have changed state.
+          if (oldest->state == RUNNABLE && oldest->queue_level == MLFQ_Q3 &&
+              oldest->pid == oldest_pid && oldest->queue_enter_tick == oldest_tick) {
+            oldest->state = RUNNING;
+            c->proc = oldest;
+            swtch(&c->context, &oldest->context);
+            mycpu()->intena = 0;
+            c->proc = 0;
+            found = 1;
+          }
+          release(&oldest->lock);
+        }
+        continue;
+      }
 
           for (int step = 0; step < NPROC; step++) {
             int index = step; // Default order
