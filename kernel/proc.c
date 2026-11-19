@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "pinfo.h"
 
 struct cpu cpus[NCPU];
 
@@ -760,4 +761,45 @@ procdump(void)
            p->queue_level, p->waiting_ticks,
            p->burst_time, p->confidence);
   }
+}
+
+
+int getprocs(uint64 user_buf, int max)
+{
+  if(max <= 0 || user_buf == 0)
+    return -1;
+
+  // تخصیص یک صفحه ۴ کیلوبایتی به جای آرایه روی پشته (برای جلوگیری از سرریز پشته هسته)
+  struct pinfo *kbuf = (struct pinfo *)kalloc();
+  if(kbuf == 0)
+    return -1;
+
+  int count = 0;
+  struct proc *p;
+
+  
+  acquire(&wait_lock);
+  for(p = proc; p < &proc[NPROC] && count < max; p++){
+    acquire(&p->lock);
+    if(p->state != UNUSED){
+      kbuf[count].pid = p->pid;
+      kbuf[count].ppid = (p->parent) ? p->parent->pid : 0; 
+      kbuf[count].state = p->state;
+      kbuf[count].sz = p->sz;
+      safestrcpy(kbuf[count].name, p->name, sizeof(kbuf[count].name));
+      count++;
+    }
+    release(&p->lock);
+  }
+  release(&wait_lock);
+
+
+  struct proc *cur = myproc();
+if(copyout(cur->pagetable, cur->sz, user_buf, (char *)kbuf, count * sizeof(struct pinfo)) < 0){
+    kfree(kbuf);
+    return -1;
+  }
+
+  kfree(kbuf);
+  return count;
 }
