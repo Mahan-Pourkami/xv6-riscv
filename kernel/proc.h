@@ -78,6 +78,13 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+#define MLFQ_Q1 1
+#define MLFQ_Q2 2
+#define MLFQ_Q3 3
+
+#define MLFQ_RR_QUANTUM 5
+#define MLFQ_AGING_TICKS 800
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -101,4 +108,12 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // MLFQ scheduling
+  int queue_level;        // Priority level
+  uint queue_enter_tick;  // Queue arrival
+  uint waiting_ticks;     // Ready waiting
+  int burst_time;         // Estimated burst
+  int confidence;         // SJF confidence
+  uint quantum_ticks;     // RR slice usage
 };

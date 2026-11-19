@@ -124,6 +124,14 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  
+  // Initialize MLFQ
+  p->queue_level = MLFQ_Q3;
+  p->queue_enter_tick = 0;
+  p->waiting_ticks = 0;
+  p->burst_time = 2;
+  p->confidence = 50;
+  p->quantum_ticks = 0;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -223,6 +231,8 @@ userinit(void)
   p = allocproc();
   initproc = p;
 
+  p->queue_level = MLFQ_Q1; // Init priority
+
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
@@ -265,6 +275,11 @@ kfork(void)
   // Allocate process.
   if ((np = allocproc()) == 0) {
     return -1;
+  }
+
+    // Shell from init
+  if (p == initproc) {
+    np->queue_level = MLFQ_Q1;
   }
 
   // Copy user memory from parent to child.
@@ -699,5 +714,11 @@ procdump(void)
       state = "???";
     printk("%d %s %s", p->pid, state, p->name);
     printk("\n");
+    
+    // Debug MLFQ state
+    printk("%d %s %s q=%d wait=%d burst=%d conf=%d\n",
+           p->pid, state, p->name,
+           p->queue_level, p->waiting_ticks,
+           p->burst_time, p->confidence);
   }
 }
