@@ -206,6 +206,9 @@ clockintr()
     ticks++;
     wakeup(&ticks);
     release(&tickslock);
+#ifdef SCHED_MLFQ
+    mlfq_aging_tick(); // Count once per system tick
+#endif
   }
 
   // ask for the next timer interrupt. this also clears

@@ -443,6 +443,28 @@ kwait(uint64 addr)
   }
 }
 
+#ifdef SCHED_MLFQ
+// Account one system-wide tick for processes waiting to run.
+void
+mlfq_aging_tick(void)
+{
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state == RUNNABLE && p->queue_level > MLFQ_Q1 &&
+        p->queue_level <= MLFQ_Q3) {
+      p->waiting_ticks++; // Count ready wait only
+      if (p->waiting_ticks >= MLFQ_AGING_TICKS) {
+        p->queue_level--; // Promote only
+        p->queue_enter_tick = ticks; // New queue entry
+        p->waiting_ticks = 0;
+      }
+    }
+    release(&p->lock);
+  }
+}
+#endif
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -505,6 +527,7 @@ scheduler(void)
           // Recheck after concurrent CPUs may have changed state.
           if (oldest->state == RUNNABLE && oldest->queue_level == MLFQ_Q3 &&
               oldest->pid == oldest_pid && oldest->queue_enter_tick == oldest_tick) {
+            oldest->waiting_ticks = 0; // Stop waiting
             oldest->state = RUNNING;
             c->proc = oldest;
             swtch(&c->context, &oldest->context);
@@ -535,6 +558,7 @@ scheduler(void)
               // Switch to chosen process.  It is the process's job
               // to release its lock and then reacquire it
               // before jumping back to us.
+              p->waiting_ticks = 0; // Stop waiting
               p->state = RUNNING;
               c->proc = p;
 
@@ -621,6 +645,7 @@ yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
+  p->waiting_ticks = 0; // Fresh wait after yield
   p->state = RUNNABLE;
   sched();
   release(&p->lock);
@@ -684,6 +709,7 @@ sleep(void)
 
   acquire(&p->lock);
   if (p->chan != 0) {
+    p->waiting_ticks = 0; // Sleeping is not waiting
     p->state = SLEEPING;
     sched();
   }
