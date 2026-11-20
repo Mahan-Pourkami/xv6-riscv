@@ -107,6 +107,7 @@ void            procdump(void);
 void            mlfq_aging_tick(void);
 int             mlfq_setparams(int, int);
 #endif
+int             getprocs(uint64, int);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

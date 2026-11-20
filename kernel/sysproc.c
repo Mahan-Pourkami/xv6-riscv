@@ -124,3 +124,14 @@ sys_mlfqset(void)
   return -1; // No MLFQ in default RR
 #endif
 }
+uint64
+sys_getprocs(void)
+{
+  uint64 addr;
+  int max;
+
+  argaddr(0, &addr);
+  argint(1, &max);
+
+  return getprocs(addr, max);
+}

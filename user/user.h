@@ -1,4 +1,5 @@
 #define SBRK_ERROR ((char *)-1)
+#include "kernel/pinfo.h"
 
 struct stat;
 
@@ -26,6 +27,7 @@ int pause(int);
 int uptime(void);
 int sync(void);
 int mlfqset(int burst, int confidence);
+int getprocs(struct pinfo *buf, int max);
 
 // ulib.c
 int stat(const char *, struct stat *);
